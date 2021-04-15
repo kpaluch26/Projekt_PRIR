@@ -4,6 +4,7 @@ using System.Data.SqlClient;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Serwer
@@ -17,6 +18,8 @@ namespace Serwer
         private List<string> permits = new List<string>();
         private MainWindow MW;
         SqlConnection database_connection;
+        private List<string> library = new List<string>();
+        static object permits_locker = new object();
 
 
         public ClientOrder(Configuration _c, MainWindow _mw, SqlConnection _dc)
@@ -29,7 +32,12 @@ namespace Serwer
         
         public void ListenStart()
         {
-          server_socket.Bind(new IPEndPoint(IPAddress.Any, config.GetPort()));
+            Task t = new Task(() => { MW.Dispatcher.Invoke(() => { library = DatabaseOrder.DownloadContent(database_connection); }); });
+            MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+            t.Start();
+            t.Wait();
+
+            server_socket.Bind(new IPEndPoint(IPAddress.Any, config.GetPort()));
             server_socket.Listen(0);
             server_socket.BeginAccept(AcceptCallback, null);
         }
@@ -37,6 +45,7 @@ namespace Serwer
         public void ListenStop()
         {
             server_socket.Close();
+            database_connection.Close();
         }
 
         private void AcceptCallback(IAsyncResult AR)
@@ -110,7 +119,7 @@ namespace Serwer
                     _password = roger[2];
                     _ip = current.RemoteEndPoint.ToString();
 
-                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { int_return = DatabaseOrder.addUser(database_connection, _login, _password, _ip); }); });
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { int_return = DatabaseOrder.AddUser(database_connection, _login, _password); }); });
                     MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
                     t.Start();
                     t.Wait();
@@ -143,18 +152,22 @@ namespace Serwer
                     _password = roger[2];
                     _ip = current.RemoteEndPoint.ToString();
 
-                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.LogIn(database_connection, _login, _password, _ip); }); });
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.LogIn(database_connection, _login, _password); }); });
                     MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
                     t.Start();
                     t.Wait();
 
                     if (bool_return)
                     {
-                        MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Pomyślnie zalogowano się na użytkownika: " + _login); });
-                        permits.Add(_login + "|" + _ip);
+                        MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Pomyślnie zalogowano się na użytkownika: " + _login); });                        
                         byte[] data = Encoding.ASCII.GetBytes("LOG|TRUE");
                         current.Send(data);
-                        current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+
+                        Monitor.Enter(permits_locker);
+                        permits.Add(_login + "|" + current.RemoteEndPoint.ToString());
+                        Monitor.Exit(permits_locker);
+
+                        current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current );
                     }
                     else
                     {
@@ -162,7 +175,7 @@ namespace Serwer
                         byte[] data = Encoding.ASCII.GetBytes("LOG|FALSE");
                         current.Send(data);
                         current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallback, current);
-                    }
+                    }                    
                 }
                 else
                 {
@@ -175,17 +188,23 @@ namespace Serwer
         {
             Socket current = (Socket)AR.AsyncState;
             int received;
-            string name = "nazwa_pliku";
+            string clientname = "nazwa_uzytkownika";
             string[] connect_data = null;
+            bool bool_return=false;
+
+            current.RemoteEndPoint.ToString();
+
+            Monitor.Enter(permits_locker);
             foreach (string x in permits)
             {
                 connect_data = x.Split('|');
-                if (connect_data[1] == current.LocalEndPoint.ToString())
+                if (connect_data[1] == current.RemoteEndPoint.ToString())
                 {
-                    name = connect_data[0];
+                    clientname = connect_data[0];
                     break;
                 }
             }
+            Monitor.Exit(permits_locker);
 
             try
             {
@@ -198,7 +217,7 @@ namespace Serwer
                 client_sockets.Remove(current);
                 foreach (string x in permits)
                 {
-                    if (x == name + "|" + current.LocalEndPoint.ToString())
+                    if (x == clientname + "|" + current.LocalEndPoint.ToString())
                     {
                         permits.Remove(x);
                         break;
@@ -221,8 +240,7 @@ namespace Serwer
             {
                 MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " used unknown commend"); });
             }
-
-            if (roger[0].ToLower() == "exit")
+            if (roger[0].ToUpper() == "EXIT")
             {
                 MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " disconnected"); });
                 MW.updateCounterOfActiveUsers(false);
@@ -230,6 +248,58 @@ namespace Serwer
                 current.Close();
                 client_sockets.Remove(current);
                 return;
+            }
+            else if (roger[0].ToUpper() == "CONTENT" && roger.Length == 2)
+            {                
+                foreach(string _book in library)
+                {
+                    byte[] data = Encoding.ASCII.GetBytes(_book);
+                    current.Send(data);
+                }
+                MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
+                byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
+                current.Send(data_end);
+                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+            }
+            else if (roger[0].ToUpper() == "ORDER" && roger.Length == 2)
+            {
+                int x = Int32.Parse(roger[1].ToString());
+                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.OrderBook(database_connection, x, clientname); }); });
+                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                t.Start();
+                t.Wait();
+
+                if (bool_return)
+                {
+                    byte[] data = Encoding.ASCII.GetBytes("ORDER|TRUE");
+                    current.Send(data);                    
+                }
+                else
+                {
+                    byte[] data = Encoding.ASCII.GetBytes("ORDER|FALSE");
+                    current.Send(data);                    
+                }
+                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+            }
+            else if(roger[0].ToUpper() == "RETURN" && roger.Length == 2)
+            {
+                int x = Int32.Parse(roger[1].ToString());
+                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.ReturnBook(database_connection, x, clientname); }); });
+                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                t.Start();
+                t.Wait();
+
+                if (bool_return)
+                {
+                    byte[] data = Encoding.ASCII.GetBytes("RETURN|TRUE");
+                    current.Send(data);
+                }
+                else
+                {
+                    byte[] data = Encoding.ASCII.GetBytes("RETURN|FALSE");
+                    current.Send(data);
+                }
+                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
             }
             //else if (roger[0].ToLower() == "done")
             //{

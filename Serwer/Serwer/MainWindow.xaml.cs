@@ -26,13 +26,9 @@ namespace Serwer
     public partial class MainWindow : Window
     {        
         Configuration config;
-        private byte[] BUFFER;
         BackgroundWorker m_oBackgroundWorker = null;
-        SqlConnection database_connection = new SqlConnection(@"Data Source = (LocalDB)\MSSQLLocalDB; AttachDbFilename = D:\PROJEKTY\PRIR\Serwer\Serwer\_data\db_library.mdf; Integrated Security = True");
-        private readonly Socket server_socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        private readonly List<Socket> client_sockets = new List<Socket>();
-        public List<Task> tasklist = new List<Task>();
-        private List<string> permits = new List<string>();
+        SqlConnection database_connection = new SqlConnection(@"Data Source = (LocalDB)\MSSQLLocalDB; AttachDbFilename = D:\PROJEKTY\PRIR\Serwer\Serwer\_data\db_library.mdf; Integrated Security = True");        
+        public List<Task> tasklist = new List<Task>();       
         private int users_counter = 0;
         private int active_users = 0;
 
@@ -97,7 +93,6 @@ namespace Serwer
                 int buffer = Int32.Parse(tbx_BufforSize.Text);
 
                 config = new Configuration(port, buffer, my_IP);
-                BUFFER = new byte[buffer];
                 
                 tbx_AddressIP.Text = my_IP;
                 tbx_AddressIP.IsEnabled = true;
