@@ -17,8 +17,7 @@ namespace Serwer
         private readonly List<Socket> client_sockets = new List<Socket>();
         private List<string> permits = new List<string>();
         private MainWindow MW;
-        SqlConnection database_connection;
-        private List<string> library = new List<string>();
+        SqlConnection database_connection;        
         static object permits_locker = new object();
 
 
@@ -32,11 +31,6 @@ namespace Serwer
         
         public void ListenStart()
         {
-            Task t = new Task(() => { MW.Dispatcher.Invoke(() => { library = DatabaseOrder.DownloadContent(database_connection); }); });
-            MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
-            t.Start();
-            t.Wait();
-
             server_socket.Bind(new IPEndPoint(IPAddress.Any, config.GetPort()));
             server_socket.Listen(0);
             server_socket.BeginAccept(AcceptCallback, null);
@@ -249,9 +243,35 @@ namespace Serwer
                 client_sockets.Remove(current);
                 return;
             }
-            else if (roger[0].ToUpper() == "CONTENT" && roger.Length == 2)
-            {                
-                foreach(string _book in library)
+            else if (roger.Length == 2 && roger[0].ToUpper() == "CONTENT" && roger[1].ToUpper() == "ALLBOOKS")
+            {
+                List<string> library = new List<string>();
+
+                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { library = DatabaseOrder.DownloadContent(database_connection); }); });
+                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                t.Start();
+                t.Wait();
+
+                foreach (string _book in library)
+                {
+                    byte[] data = Encoding.ASCII.GetBytes(_book);
+                    current.Send(data);
+                }
+                MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
+                byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
+                current.Send(data_end);
+                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+            }
+            else if (roger.Length == 2 && roger[0].ToUpper() == "CONTENT" && roger[1].ToUpper() == "MYBOOKS")
+            {
+                List<string> my_library = new List<string>();
+
+                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { my_library = DatabaseOrder.DownloadMyContent(database_connection, clientname); }); });
+                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                t.Start();
+                t.Wait();
+
+                foreach (string _book in my_library)
                 {
                     byte[] data = Encoding.ASCII.GetBytes(_book);
                     current.Send(data);
@@ -301,84 +321,26 @@ namespace Serwer
                 }
                 current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
             }
-            //else if (roger[0].ToLower() == "done")
-            //{
-            //    Task t = new Task(() => { Dispatcher.Invoke(() => { SendToBase(name); }); });
-            //    tasklist.Add(SingletonSecured.Instance.AddTask(t));
-            //    t.Start();
-            //}
-            //else if (roger[0].ToLower() == "get")
-            //{
-            //    Task t = new Task(() => { Dispatcher.Invoke(() => { DownloadPersonalizedData(name, roger[1].ToString(), current.LocalEndPoint.ToString()); }); });
-            //    tasklist.Add(SingletonSecured.Instance.AddTask(t));
-            //    t.Start();
-            //    t.Wait();
-            //    string[] value = null;
-            //    Monitor.Enter(locker);
-            //    foreach (string x in reglist.Reverse<string>())
-            //    {
-            //        value = x.Split('|');
-            //        if (value[4] == current.LocalEndPoint.ToString())
-            //        {
-            //            byte[] data = Encoding.ASCII.GetBytes("registry|" + value[0] + "|" + value[1] + "|" + value[2] + "|" + value[3]);
-            //            current.Send(data);
-            //            reglist.Remove(x);
-            //            Thread.Sleep(300);
-            //        }
-            //    }
-            //    Monitor.Exit(locker);
-            //}
-            //else if (roger[0].ToLower() == "dateget")
-            //{
-            //    Task t = new Task(() => { Dispatcher.Invoke(() => { DownloadAllData(name, current.LocalEndPoint.ToString()); }); });
-            //    tasklist.Add(SingletonSecured.Instance.AddTask(t));
-            //    t.Start();
-            //    t.Wait();
-            //    string[] value = null;
-            //    Monitor.Enter(locker_2);
-            //    foreach (string x in commits.Reverse<string>())
-            //    {
-            //        value = x.Split('|');
-            //        if (value[1] == current.LocalEndPoint.ToString())
-            //        {
-            //            byte[] data = Encoding.ASCII.GetBytes(value[0]);
-            //            current.Send(data);
-            //            commits.Remove(x);
-            //            Thread.Sleep(300);
-            //        }
-            //    }
-            //    Monitor.Exit(locker_2);
-            //}
-            //else if (roger[0].ToLower() == "registry")
-            //{
-            //    Dispatcher.Invoke(() => { lst_spis.Items.Add(text); });
+            else if (roger[0].ToUpper() == "RESERVE" && roger.Length == 2)
+            {
+                int x = Int32.Parse(roger[1].ToString());
+                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.ReserveBook(database_connection, x, clientname); }); });
+                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                t.Start();
+                t.Wait();
 
-            //    FileStream f = new FileStream(name + ".txt", FileMode.Append, FileAccess.Write);
-            //    StreamWriter w = new StreamWriter(f);
-            //    string[] reg = null;
-            //    try
-            //    {
-            //        reg = text.Split('|');
-            //    }
-            //    catch
-            //    {
-            //        Dispatcher.Invoke(() => { lst_spis.Items.Add("Client reg: " + current.RemoteEndPoint + " error"); });
-            //    }
-            //    for (int i = 1; i < reg.Length; i++)
-            //    {
-            //        if (i == 1)
-            //        {
-            //            w.Write(reg[i]);
-            //        }
-            //        else
-            //        {
-            //            w.Write("|" + reg[i]);
-            //        }
-            //    }
-            //    w.Write("\n");
-            //    w.Close();
-            //    f.Close();
-            //}
+                if (bool_return)
+                {
+                    byte[] data = Encoding.ASCII.GetBytes("RESERVE|TRUE");
+                    current.Send(data);
+                }
+                else
+                {
+                    byte[] data = Encoding.ASCII.GetBytes("RESERVE|FALSE");
+                    current.Send(data);
+                }
+                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+            }            
 
             current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
         }

@@ -100,9 +100,11 @@ namespace Serwer
 
             SqlCommand task = new SqlCommand(ask, _sql);
             SqlDataReader read = task.ExecuteReader();
-            commits.Clear();
             dt.Load(read);
-            
+
+            Monitor.Enter(commits_locker);
+            commits.Clear();
+
             for (int i = 0; i < dt.Rows.Count; i++)
             {
                 dw = dt.Rows[i];
@@ -131,6 +133,43 @@ namespace Serwer
                 txt = "CONTENT";
             }
             read.Close();
+            Monitor.Exit(commits_locker);
+
+            return commits;
+        }
+
+        public static List<string> DownloadMyContent(SqlConnection _sql, string _username)
+        {
+            DataTable dt = new DataTable();
+            DataRow dw;
+            int _user_ID = GetUserID(_sql, _username);
+
+            string ask = "SELECT BS.book_ID, BS.bookname, BS.author, BS.publishingdate " +
+                         "FROM Books BS LEFT JOIN BorrowedBooks BB ON BB.book_ID = BS.book_ID " +
+                         "WHERE BB.user_ID = '" + _user_ID + "'";
+
+            SqlCommand task = new SqlCommand(ask, _sql);
+            SqlDataReader read = task.ExecuteReader();
+            dt.Load(read);
+
+            Monitor.Enter(commits_locker);
+            commits.Clear();
+
+            for (int i = 0; i < dt.Rows.Count; i++)
+            {
+                dw = dt.Rows[i];
+                string txt = "CONTENT";
+                for (int j = 0; j < dw.ItemArray.Count(); j++)
+                {
+
+                    txt += ("|" + dw[j].ToString());
+
+                }
+                commits.Add(txt + "|");
+                txt = "CONTENT";
+            }
+            read.Close();
+            Monitor.Exit(commits_locker);
 
             return commits;
         }
@@ -143,9 +182,11 @@ namespace Serwer
                          "FROM ReservedBooks";
                             
             SqlCommand task = new SqlCommand(ask, _sql);
-            SqlDataReader read = task.ExecuteReader();
-            recommits.Clear();
+            SqlDataReader read = task.ExecuteReader();            
             dt.Load(read);
+
+            Monitor.Enter(recommits_locker);
+            recommits.Clear();
 
             for (int i = 0; i < dt.Rows.Count; i++)
             {
@@ -159,6 +200,7 @@ namespace Serwer
                 txt = "RESERVE";
             }
             read.Close();
+            Monitor.Exit(recommits_locker);
 
             return recommits;
         }
@@ -183,8 +225,7 @@ namespace Serwer
                 return true;
             }
             else
-            {
-                ReserveBook(_sql, _book_ID, _user_ID);
+            {                
                 return false;
             }
         }
@@ -240,13 +281,57 @@ namespace Serwer
             return result;
         }
 
-        private static void ReserveBook(SqlConnection _sql, int _book_ID, int _user_ID)
+        public static bool ReserveBook(SqlConnection _sql, int _book_ID, string _username)
         {
-            string ask = "INSERT INTO ReservedBooks(book_ID,user_ID) " +
-                         "VALUES (" + _book_ID + ",'" + _user_ID + "')";
+            int _user_ID = GetUserID(_sql, _username);
+            bool _order = CanReserveBook(_sql, _book_ID, _user_ID);
 
+            if (_order)
+            {
+                string ask = "INSERT INTO ReservedBooks(book_ID,user_ID) " +
+                             "VALUES (" + _book_ID + ",'" + _user_ID + "')";
+
+                SqlCommand task = new SqlCommand(ask, _sql);
+                task.ExecuteNonQuery();
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        private static bool CanReserveBook(SqlConnection _sql, int _book_ID, int _user_ID)
+        {
+            string[] roger = null;
+            bool result = false;
+
+            string ask = "SELECT COUNT(user_ID)" +
+                         "FROM ReservedBooks WHERE user_ID = '" + _user_ID + "' AND book_ID ='" + _book_ID + "'";
             SqlCommand task = new SqlCommand(ask, _sql);
-            task.ExecuteNonQuery();
+            SqlDataReader read = task.ExecuteReader();
+            read.Read();
+
+            int x = read.GetInt32(0);
+            read.Close();
+            if (x == 0)
+            {
+                Monitor.Enter(commits_locker);
+                commits = DownloadContent(_sql);
+                foreach (string _res in commits)
+                {
+                    roger = _res.Split('|');
+                    int y = Int32.Parse(roger[1]);
+
+                    if (y == _book_ID)
+                    {
+                        result = Boolean.Parse(roger[5]);
+                        break;
+                    }
+                }
+                Monitor.Exit(commits_locker);
+            }
+            return result;
         }
 
         public static bool ReturnBook(SqlConnection _sql, int _book_ID, string _username)
@@ -265,6 +350,8 @@ namespace Serwer
                 Monitor.Enter(commits_locker);
                 commits = DownloadContent(_sql);
                 Monitor.Exit(commits_locker);
+
+                OrderReservedBook(_sql, _book_ID);
 
                 return true;
             }
@@ -294,6 +381,80 @@ namespace Serwer
             {
                 return 0;
             }
+        }
+
+        private static void OrderReservedBook(SqlConnection _sql, int _book_ID)
+        {
+            Monitor.Enter(recommits_locker);
+            int _reservation_ID = CanOrderReservedBook(_sql, _book_ID);
+
+            if (_reservation_ID != 0)
+            {
+                string ask = "SELECT user_ID " +
+                             "FROM ReservedBooks " +
+                             "WHERE ID = '" + _reservation_ID + "'";
+
+                SqlCommand task = new SqlCommand(ask, _sql);
+                SqlDataReader read = task.ExecuteReader();
+                read.Read();
+                try
+                {
+                    int x = read.GetInt32(0);
+                    read.Close();
+
+                    ask = "INSERT INTO BorrowedBooks(book_ID,user_ID,reservationdate,reservationenddate) " +
+                             "VALUES (" + _book_ID + ",'" + x + "','" + DateTime.Now.ToString() + "','" + DateTime.Now.AddMonths(3).ToString() + "')";
+
+                    task = new SqlCommand(ask, _sql);
+                    task.ExecuteNonQuery();
+
+                    
+                    DeleteReservation(_sql, _reservation_ID);
+                    Monitor.Exit(recommits_locker);
+
+                    Monitor.Enter(commits_locker);
+                    commits = DownloadContent(_sql);
+                    Monitor.Exit(commits_locker);
+                }
+                catch
+                {
+                }
+            }
+            else
+            {
+                Monitor.Exit(recommits_locker);
+            }
+
+        }
+        private static int CanOrderReservedBook(SqlConnection _sql, int _book_ID)
+        {
+            string ask = "SELECT MIN(ID) " +
+                         "FROM ReservedBooks " +
+                         "WHERE book_ID = '" + _book_ID + "'";
+
+            SqlCommand task = new SqlCommand(ask, _sql);
+            SqlDataReader read = task.ExecuteReader();
+            read.Read();
+            try
+            {
+                int x = read.GetInt32(0);
+                read.Close();
+
+                return x;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static void DeleteReservation(SqlConnection _sql, int _ID)
+        {
+            string ask = "DELETE FROM ReservedBooks " +
+                         "WHERE ID = '" + _ID + "'";
+
+            SqlCommand task = new SqlCommand(ask, _sql);
+            task.ExecuteNonQuery();
         }
     }
 }
