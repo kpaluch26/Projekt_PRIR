@@ -86,7 +86,7 @@ namespace Serwer
             Array.Copy(BUFFER, recBuf, received);
             string text = Encoding.ASCII.GetString(recBuf);
 
-            if (text.ToLower() == "exit")
+            if (text.ToUpper() == "EXIT")
             {
                 MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " disconnected"); });
                 MW.updateCounterOfActiveUsers(false);
@@ -186,55 +186,169 @@ namespace Serwer
             string[] connect_data = null;
             bool bool_return=false;
 
-            current.RemoteEndPoint.ToString();
+            if (current != null && current.Connected)
+            {
+                current.RemoteEndPoint.ToString();
 
-            Monitor.Enter(permits_locker);
-            foreach (string x in permits)
-            {
-                connect_data = x.Split('|');
-                if (connect_data[1] == current.RemoteEndPoint.ToString())
-                {
-                    clientname = connect_data[0];
-                    break;
-                }
-            }
-            Monitor.Exit(permits_locker);
-
-            try
-            {
-                received = current.EndReceive(AR);
-            }
-            catch (SocketException)
-            {
-                MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " forcefully disconnected"); });
-                MW.updateCounterOfActiveUsers(false);
-                client_sockets.Remove(current);
+                Monitor.Enter(permits_locker);
                 foreach (string x in permits)
                 {
-                    if (x == clientname + "|" + current.LocalEndPoint.ToString())
+                    connect_data = x.Split('|');
+                    if (connect_data[1] == current.RemoteEndPoint.ToString())
                     {
-                        permits.Remove(x);
+                        clientname = connect_data[0];
                         break;
                     }
                 }
-                current.Close();
-                return;
-            }
+                Monitor.Exit(permits_locker);
 
-            byte[] recBuf = new byte[received];
-            Array.Copy(BUFFER, recBuf, received);
-            string text = Encoding.ASCII.GetString(recBuf);
+                try
+                {
+                    received = current.EndReceive(AR);
+                }
+                catch (SocketException)
+                {
+                    MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " forcefully disconnected"); });
+                    MW.updateCounterOfActiveUsers(false);
+                    client_sockets.Remove(current);
+                    foreach (string x in permits)
+                    {
+                        if (x == clientname + "|" + current.LocalEndPoint.ToString())
+                        {
+                            permits.Remove(x);
+                            break;
+                        }
+                    }
+                    current.Close();
+                    return;
+                }
 
-            string[] roger = null;
-            try
-            {
-                roger = text.Split('|');
+                byte[] recBuf = new byte[received];
+                Array.Copy(BUFFER, recBuf, received);
+                string text = Encoding.ASCII.GetString(recBuf);
+
+                string[] roger = null;
+                try
+                {
+                    roger = text.Split('|');
+                }
+                catch
+                {
+                    MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " used unknown commend"); });
+                }
+                if (roger[0].ToUpper() == "EXIT")
+                {
+                    MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " disconnected"); });
+                    MW.updateCounterOfActiveUsers(false);
+                    current.Shutdown(SocketShutdown.Both);
+                    current.Close();
+                    client_sockets.Remove(current);
+                    return;
+                }
+                else if (roger.Length == 2 && roger[0].ToUpper() == "CONTENT" && roger[1].ToUpper() == "ALLBOOKS")
+                {
+                    List<string> library = new List<string>();
+
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { library = DatabaseOrder.DownloadContent(database_connection); }); });
+                    MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                    t.Start();
+                    t.Wait();
+
+                    foreach (string _book in library)
+                    {
+                        byte[] data = Encoding.UTF8.GetBytes(_book);
+                        current.Send(data);
+                        Thread.Sleep(100);
+                    }
+                    MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
+                    byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
+                    current.Send(data_end);
+                    current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+                }
+                else if (roger.Length == 2 && roger[0].ToUpper() == "CONTENT" && roger[1].ToUpper() == "MYBOOKS")
+                {
+                    List<string> my_library = new List<string>();
+
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { my_library = DatabaseOrder.DownloadMyContent(database_connection, clientname); }); });
+                    MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                    t.Start();
+                    t.Wait();
+
+                    foreach (string _book in my_library)
+                    {
+                        byte[] data = Encoding.UTF8.GetBytes(_book);
+                        current.Send(data);
+                        Thread.Sleep(100);
+                    }
+                    MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
+                    byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
+                    current.Send(data_end);
+                    current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+                }
+                else if (roger[0].ToUpper() == "ORDER" && roger.Length == 2)
+                {
+                    int x = Int32.Parse(roger[1].ToString());
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.OrderBook(database_connection, x, clientname); }); });
+                    MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                    t.Start();
+                    t.Wait();
+
+                    if (bool_return)
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes("ORDER|TRUE");
+                        current.Send(data);
+                    }
+                    else
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes("ORDER|FALSE");
+                        current.Send(data);
+                    }
+                    current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+                }
+                else if (roger[0].ToUpper() == "RETURN" && roger.Length == 2)
+                {
+                    int x = Int32.Parse(roger[1].ToString());
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.ReturnBook(database_connection, x, clientname); }); });
+                    MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                    t.Start();
+                    t.Wait();
+
+                    if (bool_return)
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes("RETURN|TRUE");
+                        current.Send(data);
+                    }
+                    else
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes("RETURN|FALSE");
+                        current.Send(data);
+                    }
+                    current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+                }
+                else if (roger[0].ToUpper() == "RESERVE" && roger.Length == 2)
+                {
+                    int x = Int32.Parse(roger[1].ToString());
+                    Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.ReserveBook(database_connection, x, clientname); }); });
+                    MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
+                    t.Start();
+                    t.Wait();
+
+                    if (bool_return)
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes("RESERVE|TRUE");
+                        current.Send(data);
+                    }
+                    else
+                    {
+                        byte[] data = Encoding.ASCII.GetBytes("RESERVE|FALSE");
+                        current.Send(data);
+                    }
+                    current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
+                }
+
+                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
             }
-            catch
-            {
-                MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " used unknown commend"); });
-            }
-            if (roger[0].ToUpper() == "EXIT")
+            else
             {
                 MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " disconnected"); });
                 MW.updateCounterOfActiveUsers(false);
@@ -243,108 +357,6 @@ namespace Serwer
                 client_sockets.Remove(current);
                 return;
             }
-            else if (roger.Length == 2 && roger[0].ToUpper() == "CONTENT" && roger[1].ToUpper() == "ALLBOOKS")
-            {
-                List<string> library = new List<string>();
-
-                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { library = DatabaseOrder.DownloadContent(database_connection); }); });
-                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
-                t.Start();
-                t.Wait();
-
-                foreach (string _book in library)
-                {
-                    byte[] data = Encoding.ASCII.GetBytes(_book);
-                    current.Send(data);
-                    Thread.Sleep(100);
-                }
-                MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
-                byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
-                current.Send(data_end);
-                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
-            }
-            else if (roger.Length == 2 && roger[0].ToUpper() == "CONTENT" && roger[1].ToUpper() == "MYBOOKS")
-            {
-                List<string> my_library = new List<string>();
-
-                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { my_library = DatabaseOrder.DownloadMyContent(database_connection, clientname); }); });
-                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
-                t.Start();
-                t.Wait();
-
-                foreach (string _book in my_library)
-                {
-                    byte[] data = Encoding.ASCII.GetBytes(_book);
-                    current.Send(data);
-                    Thread.Sleep(100);
-                }
-                MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
-                byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
-                current.Send(data_end);
-                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
-            }
-            else if (roger[0].ToUpper() == "ORDER" && roger.Length == 2)
-            {
-                int x = Int32.Parse(roger[1].ToString());
-                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.OrderBook(database_connection, x, clientname); }); });
-                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
-                t.Start();
-                t.Wait();
-
-                if (bool_return)
-                {
-                    byte[] data = Encoding.ASCII.GetBytes("ORDER|TRUE");
-                    current.Send(data);                    
-                }
-                else
-                {
-                    byte[] data = Encoding.ASCII.GetBytes("ORDER|FALSE");
-                    current.Send(data);                    
-                }
-                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
-            }
-            else if(roger[0].ToUpper() == "RETURN" && roger.Length == 2)
-            {
-                int x = Int32.Parse(roger[1].ToString());
-                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.ReturnBook(database_connection, x, clientname); }); });
-                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
-                t.Start();
-                t.Wait();
-
-                if (bool_return)
-                {
-                    byte[] data = Encoding.ASCII.GetBytes("RETURN|TRUE");
-                    current.Send(data);
-                }
-                else
-                {
-                    byte[] data = Encoding.ASCII.GetBytes("RETURN|FALSE");
-                    current.Send(data);
-                }
-                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
-            }
-            else if (roger[0].ToUpper() == "RESERVE" && roger.Length == 2)
-            {
-                int x = Int32.Parse(roger[1].ToString());
-                Task t = new Task(() => { MW.Dispatcher.Invoke(() => { bool_return = DatabaseOrder.ReserveBook(database_connection, x, clientname); }); });
-                MW.tasklist.Add(SingletonSecured.Instance.AddTask(t));
-                t.Start();
-                t.Wait();
-
-                if (bool_return)
-                {
-                    byte[] data = Encoding.ASCII.GetBytes("RESERVE|TRUE");
-                    current.Send(data);
-                }
-                else
-                {
-                    byte[] data = Encoding.ASCII.GetBytes("RESERVE|FALSE");
-                    current.Send(data);
-                }
-                current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
-            }            
-
-            current.BeginReceive(BUFFER, 0, config.GetBuffer(), SocketFlags.None, ReceiveCallbackLoged, current);
         }
     }
 }
