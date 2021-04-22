@@ -256,6 +256,7 @@ namespace Serwer
                 {
                     byte[] data = Encoding.ASCII.GetBytes(_book);
                     current.Send(data);
+                    Thread.Sleep(100);
                 }
                 MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
                 byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");
@@ -275,6 +276,7 @@ namespace Serwer
                 {
                     byte[] data = Encoding.ASCII.GetBytes(_book);
                     current.Send(data);
+                    Thread.Sleep(100);
                 }
                 MW.Dispatcher.Invoke(() => { MW.lbx_OperationsList.Items.Add("Client: " + current.RemoteEndPoint + " download library content."); });
                 byte[] data_end = Encoding.ASCII.GetBytes("CONTENT|END");

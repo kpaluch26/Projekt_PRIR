@@ -80,7 +80,7 @@ namespace Serwer
         private void btn_DefaultOptions_Click(object sender, RoutedEventArgs e)
         {
             tbx_BufforSize.Text = "512";
-            tbx_PortNumber.Text = "7564";
+            tbx_PortNumber.Text = "7654";
         }
 
         private void btn_StartWork_Click(object sender, RoutedEventArgs e)
@@ -88,7 +88,9 @@ namespace Serwer
             try
             {
                 string host_name = Dns.GetHostName();
-                string my_IP = Dns.GetHostByName(host_name).AddressList[1].ToString();
+                IPHostEntry ip_entry = System.Net.Dns.GetHostEntry(host_name);
+                IPAddress[] all_address = ip_entry.AddressList;
+                string my_IP = all_address.Where(x => x.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork).FirstOrDefault().ToString();
                 int port = Int32.Parse(tbx_PortNumber.Text);
                 int buffer = Int32.Parse(tbx_BufforSize.Text);
 
